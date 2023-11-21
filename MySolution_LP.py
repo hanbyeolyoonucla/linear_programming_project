@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.metrics import normalized_mutual_info_score, accuracy_score
 ### TODO: import any other packages you need for your solution
+import cvxpy as cp
 
 #--- Task 1 ---#
 class MyClassifier:  
@@ -53,29 +54,68 @@ class MyClustering:
             TODO: cluster trainX using LP(s) and store the parameters that discribe the identified clusters
         '''
 
-        # initial centroids: randomly select K points from trainX
-        self.cluster_centers_ = trainX[np.random.choice(trainX.shape[0], size=self.K, replace=False)]
+        # STEP1 - initialization: randomly select K points from trainX (initial centroids)
+        n = trainX.shape[0]  # number of data points
+        m = trainX.shape[1]  # size of each data point
+        self.cluster_centers_ = trainX[np.random.choice(n, size=self.K, replace=False)]
 
-        # while labels changes
+        # STEP2 - iteration of assignment and update
         itr = 0
-        max_itr = 10000
+        max_itr = 1e6
+        trh = 1e-6
         while itr < max_itr:
+            # iteration
             itr = itr + 1
 
-            # distance of points from centroids n x K
-            vector_from_centers = trainX.reshape(trainX.shape[0], 1, trainX.shape[1]) - self.cluster_centers_  # n x K x m
+            # distance d_ij
+            vector_from_centers = trainX.reshape(n, 1, m) - self.cluster_centers_  # n x K x m
             distance_from_centers = np.linalg.norm(vector_from_centers, axis=2)  # n x K
+            d_ij = distance_from_centers.flatten()
 
-            # update labels
-            new_labels = np.argmin(distance_from_centers, axis=1)
-            if np.all(new_labels == self.labels):
-                break
-            else:
-                self.labels = new_labels
+            # STEP2.1 - Assignment (Linear Programming)
+            # constraint 1: each data has to be assigned to one cluster
+            A_1 = np.zeros((n, n * self.K))
+            for i in range(n):
+                A_1[i, i * self.K: (i + 1) * self.K] = np.ones(self.K)
+            b_1 = np.ones(n)
+            # constraint 2: a cluster includes at least one data
+            A_2 = np.tile(np.eye(self.K), n)
+            b_2 = np.ones(self.K)
+            # constraint 3: integer
+            A_3 = np.eye(n * self.K)
+            b_3 = np.zeros(n * self.K)
+            A_4 = np.eye(n * self.K)
+            b_4 = np.ones(n * self.K)
+            # variable x_ij
+            x_ij = cp.Variable(n * self.K)
+            # optimization problem
+            prob = cp.Problem(cp.Minimize(d_ij.T @ x_ij),
+                              [A_1 @ x_ij == b_1,
+                               A_2 @ x_ij >= b_2,
+                               A_3 @ x_ij >= b_3,
+                               A_4 @ x_ij <= b_4])
+            prob.solve()
+            # assign labels
+            x_ij = x_ij.value.reshape((n, self.K))
+            new_labels = np.argmax(x_ij, axis=1)
 
             # update cluster centroids
-            for i in np.arange(self.K):
-                self.cluster_centers_[i, :] = np.mean(trainX[self.labels == i], axis=0)
+            new_cluster_centers_ = np.zeros_like(self.cluster_centers_)
+            for j in np.arange(self.K):
+                new_cluster_centers_[j, :] = np.mean(trainX[new_labels == j], axis=0)
+
+            # convergence criteria
+            if np.max(np.linalg.norm(self.cluster_centers_ - new_cluster_centers_, axis=1)) < trh:
+                self.cluster_centers_ = new_cluster_centers_
+                self.labels = new_labels
+                break
+            else:
+                self.cluster_centers_ = new_cluster_centers_
+                self.labels = new_labels
+            # if np.all(new_labels == self.labels):
+            #     break
+            # else:
+            #     self.labels = new_labels
 
         # Update and return the cluster labels of the training data (trainX)
         return self.labels
